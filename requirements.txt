@@ -1,9 +1,11 @@
 streamlit==1.36.0
-pandas>=2.0
-matplotlib>=3.8
-prettymaps==0.3.6
-shapely>=2.0
-geopandas>=0.14
-osmnx>=1.9.4
-networkx>=3.0
-descartes
+pandas==2.2.2
+matplotlib==3.8.4
+
+# geospatial stack
+prettymaps==1.4.2
+osmnx==1.9.4
+geopandas==0.14.4
+shapely==2.0.4
+networkx==3.2.1
+pyproj==3.6.1
