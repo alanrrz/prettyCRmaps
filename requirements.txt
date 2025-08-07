@@ -5,3 +5,5 @@ prettymaps==0.3.6
 shapely>=2.0
 geopandas>=0.14
 osmnx>=1.9.4
+networkx>=3.0
+descartes
