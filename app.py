@@ -1,8 +1,17 @@
 import io
-import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
-from prettymaps import plot as pretty_plot
+
+try:
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from prettymaps import plot as pretty_plot
+except Exception as e:
+    st.error(
+        "Dependencies not installed. Confirm runtime.txt is '3.11' and requirements are pinned. "
+        f"Installer error: {e}"
+    )
+    st.stop()
+
 
 st.set_page_config(page_title="LAUSD Mini-Maps", layout="wide")
 
