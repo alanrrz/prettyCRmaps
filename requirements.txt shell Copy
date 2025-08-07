@@ -1,0 +1,7 @@
+streamlit==1.36.0
+pandas>=2.0
+matplotlib>=3.8
+prettymaps==0.3.6
+shapely>=2.0
+geopandas>=0.14
+osmnx>=1.9.4
