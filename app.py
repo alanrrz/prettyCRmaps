@@ -245,25 +245,29 @@ with left:
 
         m.add_child(MeasureControl(primary_length_unit="miles"))
 
+        # Robust label rendering
         for idx, lab in enumerate(st.session_state.labels):
-            if lab.get("style") == "SVG_ICON":
-                folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=lab["svg"])).add_to(m)
-            else:
-                style = lab.get("style", "Label")
-                size = lab.get("size", 16)
-                color = lab.get("color", "#111")
-                
-                html_style = ""
-                if style == "Label":
-                    bg = rgba_from_hex(lab.get("bg_hex", "#FFFFFF"), lab.get("bg_alpha", 0.8))
-                    html_style = f"font-weight:700;font-size:{size}px;color:{color};background:{bg};padding:2px 6px;border:1px solid {color};border-radius:3px"
-                elif style == "Outlined":
-                    html_style = f"font-weight:800;font-size:{size}px;color:{color};-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff"
+            try:
+                if lab.get("style") == "SVG_ICON":
+                    folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=lab["svg"])).add_to(m)
                 else:
-                    html_style = f"font-weight:800;font-size:{size}px;color:{color};border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};padding:4px 8px;border-radius:3px"
+                    style = lab.get("style", "Label")
+                    size = lab.get("size", 16)
+                    color = lab.get("color", "#111")
+                    
+                    html_style = ""
+                    if style == "Label":
+                        bg = rgba_from_hex(lab.get("bg_hex", "#FFFFFF"), lab.get("bg_alpha", 0.8))
+                        html_style = f"font-weight:700;font-size:{size}px;color:{color};background:{bg};padding:2px 6px;border:1px solid {color};border-radius:3px"
+                    elif style == "Outlined":
+                        html_style = f"font-weight:800;font-size:{size}px;color:{color};-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff"
+                    else:
+                        html_style = f"font-weight:800;font-size:{size}px;color:{color};border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};padding:4px 8px;border-radius:3px"
 
-                html = f"<div style='{html_style}'>{lab['text']}</div>"
-                folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=html)).add_to(m)
+                    html = f"<div style='{html_style}'>{lab['text']}</div>"
+                    folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=html)).add_to(m)
+            except Exception as e:
+                st.warning(f"Error rendering label {idx}: {e}. Skipping...")
 
         return m
 
