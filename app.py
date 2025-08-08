@@ -1,120 +1,140 @@
-# Minimal, reliable, fast. No geopandas/osmnx/matplotlib.
-# Renders PNGs from OSM tiles using 'staticmap' and converts to black/white with Pillow.
+# Minimal School Selector + PNG map export (Leaflet only)
+# Loads your schools CSV (GitHub URL), lets you pick a school, shows a minimalist map,
+# and adds a client-side "Export PNG" button (Leaflet.easyPrint).
 
-import io
-import math
+import csv
+import requests
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
+from branca.element import MacroElement, JavascriptLink
+from jinja2 import Template
 
-try:
-    import pandas as pd
-    from staticmap import StaticMap, CircleMarker
-    from PIL import Image, ImageOps, ImageEnhance
-except Exception as e:
-    st.error(f"Missing deps. Install exact versions from requirements.txt. Error: {e}")
-    st.stop()
+st.set_page_config(page_title="School Mini-Maps (PNG)", layout="wide")
 
-st.set_page_config(page_title="LAUSD Mini-Maps (PNG)", layout="wide")
-RAW_CSV_DEFAULT = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
+DEFAULT_CSV = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
 
+# --- helpers (no pandas) ---
 @st.cache_data(show_spinner=False)
-def load_schools(src):
-    df = pd.read_csv(src)
-    for c in ("school_name","latitude","longitude"):
-        if c not in df.columns:
-            raise ValueError(f"Missing column: {c}")
-    df = df.dropna(subset=["school_name","latitude","longitude"]).copy()
-    df["school_name"] = df["school_name"].astype(str)
-    df["latitude"] = df["latitude"].astype(float)
-    df["longitude"] = df["longitude"].astype(float)
-    return df
+def load_schools(url: str):
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    reader = csv.DictReader(r.text.splitlines())
+    rows = []
+    for row in reader:
+        # accept either LAT/LON or latitude/longitude column names
+        name = row.get("LABEL") or row.get("school_name") or row.get("School") or row.get("NAME")
+        lat = row.get("LAT") or row.get("latitude") or row.get("lat")
+        lon = row.get("LON") or row.get("longitude") or row.get("lon")
+        if not name or not lat or not lon:
+            continue
+        try:
+            rows.append({"name": str(name).strip(), "lat": float(lat), "lon": float(lon)})
+        except ValueError:
+            continue
+    if not rows:
+        raise ValueError("CSV must include name + lat/lon columns (e.g., LABEL,LAT,LON or school_name,latitude,longitude).")
+    # unique, sorted
+    unique = {r["name"]: r for r in rows}
+    names = sorted(unique.keys())
+    return names, unique
 
-def render_staticmap(lon, lat, width, height, zoom, tile_url):
-    m = StaticMap(width, height, url_template=tile_url, delay_seconds=0)  # no retry delays
-    m.add_marker(CircleMarker((lon, lat), '#000000', 12))
-    image = m.render(zoom=zoom)
-    return image
+class EasyPrint(MacroElement):
+    """Adds Leaflet.easyPrint control for client-side PNG export."""
+    _template = Template("""
+        {% macro script(this, kwargs) %}
+            (function(){
+              var map = {{this._parent.get_name()}};
+              var printer = L.easyPrint({
+                  tileLayer: null,
+                  sizeModes: ['A4Portrait','A4Landscape'],
+                  filename: '{{this.file_name}}',
+                  exportOnly: true,
+                  hideControlContainer: false
+              }).addTo(map);
 
-def to_bw(image, invert=False, boost=1.2, threshold=None):
-    # Convert to grayscale
-    img = ImageOps.grayscale(image)
-    # Boost contrast slightly for tiny prints
-    if boost and boost != 1.0:
-        img = ImageEnhance.Contrast(img).enhance(boost)
-    # Optional binary threshold for photocopy-safe output
-    if threshold is not None:
-        img = img.point(lambda p: 255 if p > threshold else 0)
-    # Optional invert for dark background layouts
-    if invert:
-        img = ImageOps.invert(img)
-    return img
+              // Add a small custom button that exports current view as PNG
+              var btn = L.control({position: '{{this.position}}'});
+              btn.onAdd = function(){
+                  var div = L.DomUtil.create('div','leaflet-bar');
+                  var a = L.DomUtil.create('a','',div);
+                  a.innerHTML = '⤓';
+                  a.title = 'Export PNG';
+                  a.href = '#';
+                  a.style.textAlign = 'center';
+                  a.style.width = '30px';
+                  a.style.lineHeight = '30px';
+                  L.DomEvent.on(a, 'click', function(e){
+                      L.DomEvent.stop(e);
+                      printer.printMap('CurrentSize', '{{this.file_name}}');
+                  });
+                  return div;
+              };
+              btn.addTo(map);
+            })();
+        {% endmacro %}
+    """)
+    def __init__(self, file_name="map_export", position="topleft"):
+        super().__init__()
+        self._name = "EasyPrint"
+        self.file_name = file_name
+        self.position = position
 
+# --- UI ---
 st.title("School Mini-Maps (PNG)")
 
-# Data source
 src_mode = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
 if src_mode == "GitHub CSV":
-    csv_url = st.text_input("Raw CSV URL", RAW_CSV_DEFAULT)
-    df = load_schools(csv_url)
+    csv_url = st.text_input("Raw CSV URL", DEFAULT_CSV)
+    names, name_to_row = load_schools(csv_url)
 else:
     up = st.file_uploader("Upload schools.csv", type=["csv"])
     if not up:
         st.stop()
-    df = load_schools(up)
+    content = up.read().decode("utf-8")
+    names, name_to_row = load_schools("data:text/plain," + content)
 
-left, right = st.columns([2,1])
-with left:
-    school = st.selectbox("School", df["school_name"].tolist())
-    row = df[df["school_name"] == school].iloc[0]
-    lat, lon = float(row["latitude"]), float(row["longitude"])
+col1, col2 = st.columns([2,1])
+with col1:
+    school = st.selectbox("Select school", names, index=0)
+    target = name_to_row[school]
+    lat, lon = target["lat"], target["lon"]
 
     c1, c2, c3 = st.columns(3)
     with c1:
         zoom = st.slider("Zoom", 12, 19, 16)
     with c2:
-        px = st.select_slider("Export size (px)", options=[512, 768, 1024, 1536, 2048], value=1024)
+        bw_tiles = st.selectbox("Style", ["Positron (light, B/W)", "DarkMatter (dark)", "OSM Standard"], index=0)
     with c3:
-        bw_mode = st.selectbox("B/W mode", ["Grayscale", "High-contrast", "Binarized"])
-    invert = st.checkbox("Invert (white roads on black)", value=False)
+        show_label = st.checkbox("Show label", value=True)
 
-    # Tile servers. Keep defaults simple and reliable.
-    tile_choice = st.selectbox(
-        "Tiles",
-        [
-            "OpenStreetMap Standard",
-            "Carto Light (if available)",
-        ],
-        index=0,
-        help="If Carto fails, use OSM."
-    )
-    tile_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" if tile_choice.startswith("OpenStreetMap") \
-        else "https://{a}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+    # tile templates
+    if bw_tiles.startswith("Positron"):
+        tiles = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+        attr  = "© OpenStreetMap, © CARTO"
+    elif bw_tiles.startswith("DarkMatter"):
+        tiles = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+        attr  = "© OpenStreetMap, © CARTO"
+    else:
+        tiles = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attr  = "© OpenStreetMap contributors"
 
-    render = st.button("Render PNG", type="primary")
+    # build map (minimal UI)
+    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None, control_scale=False, zoom_control=True)
+    folium.TileLayer(tiles=tiles, attr=attr, max_zoom=20, name="base").add_to(m)
+    folium.CircleMarker([lat, lon], radius=6, color="#000", fill=True, fill_opacity=1).add_to(m)
+    if show_label:
+        folium.Marker([lat, lon], tooltip=school).add_to(m)
 
-with right:
-    st.write("Guidelines:")
-    st.write("- Use 16–18 zoom for campus-level detail.")
-    st.write("- Use 1024–1536 px for small flyers.")
-    st.write("- Choose Binarized for photocopy-safe black/white.")
+    # add easyPrint CDN + control
+    m.get_root().header.add_child(JavascriptLink("https://unpkg.com/leaflet-easyprint@2.1.9/dist/bundle.min.js"))
+    m.add_child(EasyPrint(file_name=school.replace(" ","_")))
 
-if render:
-    img = render_staticmap(lon, lat, px, px, zoom, tile_url)
+    st.caption("Use the ⤓ button on the map to download a PNG of the current view.")
 
-    if bw_mode == "Grayscale":
-        out = to_bw(img, invert=invert, boost=1.1, threshold=None)
-    elif bw_mode == "High-contrast":
-        out = to_bw(img, invert=invert, boost=1.6, threshold=None)
-    else:  # Binarized
-        out = to_bw(img, invert=invert, boost=1.3, threshold=160)
-
-    buf = io.BytesIO()
-    out.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-
-    st.image(out, caption=f"{school} · zoom {zoom}", use_container_width=True)
-    st.download_button(
-        "Download PNG",
-        data=buf,
-        file_name=f"{school.replace(' ','_')}_z{zoom}_{px}px_{bw_mode.replace(' ','_')}{'_inv' if invert else ''}.png",
-        mime="image/png",
-    )
+    out = st_folium(m, height=520, width=None, returned_objects=[])
+with col2:
+    st.write("Tips")
+    st.write("- Positron is best for black-and-white print.")
+    st.write("- Adjust zoom for campus-level detail.")
+    st.write("- Toggle label for ultra-minimal look.")
