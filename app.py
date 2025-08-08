@@ -1,169 +1,120 @@
-# School Mini-Maps (B/W) — Streamlit + prettymaps
-# Loads your GitHub CSV by default, renders ultra-minimal static maps, exports PNGs.
+# Minimal, reliable, fast. No geopandas/osmnx/matplotlib.
+# Renders PNGs from OSM tiles using 'staticmap' and converts to black/white with Pillow.
 
 import io
-import sys
-import traceback
+import math
 import streamlit as st
 
-# Fail-safe imports with a clear error if deps are missing
 try:
     import pandas as pd
-    import matplotlib.pyplot as plt
-    from prettymaps import plot as pretty_plot
+    from staticmap import StaticMap, CircleMarker
+    from PIL import Image, ImageOps, ImageEnhance
 except Exception as e:
-    st.error(
-        "Dependencies not installed. Confirm runtime.txt is '3.11' and requirements.txt pins "
-        "versions as provided. Installer error:\n\n"
-        f"{e}\n\n"
-        f"{traceback.format_exc()}"
-    )
+    st.error(f"Missing deps. Install exact versions from requirements.txt. Error: {e}")
     st.stop()
 
-st.set_page_config(page_title="LAUSD Mini-Maps", layout="wide")
-
+st.set_page_config(page_title="LAUSD Mini-Maps (PNG)", layout="wide")
 RAW_CSV_DEFAULT = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
 
 @st.cache_data(show_spinner=False)
-def load_schools_csv(src):
-    if hasattr(src, "read"):
-        df = pd.read_csv(src)
-    else:
-        df = pd.read_csv(src)
-    if "school_name" not in df.columns:
-        raise ValueError("Missing required column: school_name")
-    if "latitude" not in df.columns or "longitude" not in df.columns:
-        raise ValueError("Missing required columns: latitude, longitude")
-    df = df.dropna(subset=["school_name", "latitude", "longitude"]).copy()
+def load_schools(src):
+    df = pd.read_csv(src)
+    for c in ("school_name","latitude","longitude"):
+        if c not in df.columns:
+            raise ValueError(f"Missing column: {c}")
+    df = df.dropna(subset=["school_name","latitude","longitude"]).copy()
     df["school_name"] = df["school_name"].astype(str)
     df["latitude"] = df["latitude"].astype(float)
     df["longitude"] = df["longitude"].astype(float)
     return df
 
-def get_style_palette(style: str, line_w: int):
-    if style == "Mono Light":
-        return dict(
-            bg="#FFFFFF", fg="#111111",
-            bld_face="#F7F7F7", bld_edge="#00000000",
-            water_face="#EDEDED", green_face="#F3F3F3",
-            lw=line_w
-        )
-    if style == "Mono Dark":
-        return dict(
-            bg="#0E0E0E", fg="#FAFAFA",
-            bld_face="#1A1A1A", bld_edge="#00000000",
-            water_face="#141414", green_face="#121212",
-            lw=line_w
-        )
-    # Print Tiny
-    return dict(
-        bg="#FFFFFF", fg="#000000",
-        bld_face="#FFFFFF", bld_edge="#000000",
-        water_face="#FFFFFF", green_face="#FFFFFF",
-        lw=line_w
-    )
+def render_staticmap(lon, lat, width, height, zoom, tile_url):
+    m = StaticMap(width, height, url_template=tile_url, delay_seconds=0)  # no retry delays
+    m.add_marker(CircleMarker((lon, lat), '#000000', 12))
+    image = m.render(zoom=zoom)
+    return image
 
-def make_layers(pal):
-    lw = pal["lw"]
-    return {
-        "perimeter": {"circle": False},
-        "streets": {
-            "width": {
-                "motorway": 3 + lw,
-                "primary": 2 + lw,
-                "secondary": 2 + lw,
-                "tertiary": 1 + lw,
-                "residential": 1 + lw,
-                "path": 0.5 + 0.5 * lw,
-            },
-            "zorder": 3,
-            "default_color": pal["fg"],
-        },
-        "buildings": {
-            "facecolor": pal["bld_face"],
-            "edgecolor": pal["bld_edge"],
-            "linewidth": 0.3 if pal["bld_edge"] != "#00000000" else 0,
-            "zorder": 2,
-        },
-        "water": {"facecolor": pal["water_face"], "edgecolor": pal["water_face"], "zorder": 1},
-        "green": {"facecolor": pal["green_face"], "edgecolor": pal["green_face"], "zorder": 1},
-    }
+def to_bw(image, invert=False, boost=1.2, threshold=None):
+    # Convert to grayscale
+    img = ImageOps.grayscale(image)
+    # Boost contrast slightly for tiny prints
+    if boost and boost != 1.0:
+        img = ImageEnhance.Contrast(img).enhance(boost)
+    # Optional binary threshold for photocopy-safe output
+    if threshold is not None:
+        img = img.point(lambda p: 255 if p > threshold else 0)
+    # Optional invert for dark background layouts
+    if invert:
+        img = ImageOps.invert(img)
+    return img
 
-st.title("School Mini-Maps (B/W)")
+st.title("School Mini-Maps (PNG)")
 
-# Data source controls
-src_choice = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
-if src_choice == "GitHub CSV":
+# Data source
+src_mode = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
+if src_mode == "GitHub CSV":
     csv_url = st.text_input("Raw CSV URL", RAW_CSV_DEFAULT)
-    try:
-        df = load_schools_csv(csv_url)
-    except Exception as e:
-        st.error(f"CSV load failed: {e}")
-        st.stop()
+    df = load_schools(csv_url)
 else:
     up = st.file_uploader("Upload schools.csv", type=["csv"])
     if not up:
         st.stop()
-    try:
-        df = load_schools_csv(up)
-    except Exception as e:
-        st.error(f"CSV load failed: {e}")
-        st.stop()
+    df = load_schools(up)
 
-left, right = st.columns([2, 1])
-
+left, right = st.columns([2,1])
 with left:
-    school = st.selectbox("School", options=df["school_name"].tolist())
+    school = st.selectbox("School", df["school_name"].tolist())
     row = df[df["school_name"] == school].iloc[0]
     lat, lon = float(row["latitude"]), float(row["longitude"])
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        radius_m = st.slider("Radius (m)", 200, 2500, 900, step=50)
+        zoom = st.slider("Zoom", 12, 19, 16)
     with c2:
-        line_w = st.slider("Line weight", 0, 4, 1, step=1)
+        px = st.select_slider("Export size (px)", options=[512, 768, 1024, 1536, 2048], value=1024)
     with c3:
-        dpi = st.selectbox("Export DPI", [150, 300, 450, 600], index=3)
+        bw_mode = st.selectbox("B/W mode", ["Grayscale", "High-contrast", "Binarized"])
+    invert = st.checkbox("Invert (white roads on black)", value=False)
 
-    style = st.selectbox("Style", ["Print Tiny", "Mono Light", "Mono Dark"], index=0)
-    fig_size_in = st.slider("Figure size (inches)", 3.0, 10.0, 5.0, 0.5)
+    # Tile servers. Keep defaults simple and reliable.
+    tile_choice = st.selectbox(
+        "Tiles",
+        [
+            "OpenStreetMap Standard",
+            "Carto Light (if available)",
+        ],
+        index=0,
+        help="If Carto fails, use OSM."
+    )
+    tile_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" if tile_choice.startswith("OpenStreetMap") \
+        else "https://{a}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
 
-render = st.button("Render", type="primary")
+    render = st.button("Render PNG", type="primary")
 
 with right:
-    st.subheader("Notes")
-    st.write("- Use small radii for clarity in tiny prints.")
-    st.write("- ‘Print Tiny’ is pure outlines for photocopies.")
-    st.write("- Export at 450–600 DPI for small callouts.")
+    st.write("Guidelines:")
+    st.write("- Use 16–18 zoom for campus-level detail.")
+    st.write("- Use 1024–1536 px for small flyers.")
+    st.write("- Choose Binarized for photocopy-safe black/white.")
 
 if render:
-    pal = get_style_palette(style, line_w)
-    layers = make_layers(pal)
+    img = render_staticmap(lon, lat, px, px, zoom, tile_url)
 
-    fig, ax = plt.subplots(figsize=(fig_size_in, fig_size_in), dpi=dpi)
-    ax.set_facecolor(pal["bg"])
-
-    center = f"{lat},{lon}"
-    try:
-        pretty_plot(center, radius=radius_m, layers=layers, ax=ax, padding=0.04)
-    except Exception as e:
-        st.error(
-            "Map render failed. OSM network or geospatial deps may be missing. "
-            f"Error: {e}"
-        )
-        st.stop()
-
-    ax.set_axis_off()
+    if bw_mode == "Grayscale":
+        out = to_bw(img, invert=invert, boost=1.1, threshold=None)
+    elif bw_mode == "High-contrast":
+        out = to_bw(img, invert=invert, boost=1.6, threshold=None)
+    else:  # Binarized
+        out = to_bw(img, invert=invert, boost=1.3, threshold=160)
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0)
+    out.save(buf, format="PNG", optimize=True)
     buf.seek(0)
 
-    st.pyplot(fig, use_container_width=True)
+    st.image(out, caption=f"{school} · zoom {zoom}", use_container_width=True)
     st.download_button(
         "Download PNG",
         data=buf,
-        file_name=f"{school.replace(' ', '_')}_{radius_m}m_{style.replace(' ','_')}.png",
+        file_name=f"{school.replace(' ','_')}_z{zoom}_{px}px_{bw_mode.replace(' ','_')}{'_inv' if invert else ''}.png",
         mime="image/png",
     )
-
