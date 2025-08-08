@@ -150,8 +150,7 @@ if "last_clicked" not in st.session_state:
 if "selected_label_idx" not in st.session_state:
     st.session_state.selected_label_idx = 0
 if "address_coords" not in st.session_state:
-    # Default location for initial load
-    st.session_state.address_coords = (33.9239, -118.2620)
+    st.session_state.address_coords = (33.9239, -118.2620) # Default location
 
 # --------------------------------
 # App layout
@@ -189,6 +188,7 @@ def geocode_address(address):
         st.error(f"An unexpected error occurred: {e}")
         return None, None
 
+# Update coordinates only when button is pressed
 if search_button:
     with st.spinner("Finding location..."):
         lat, lon = geocode_address(address_input)
@@ -402,3 +402,9 @@ with right:
                 st.session_state.labels = []
                 st.session_state.selected_label_idx = 0
                 st.experimental_rerun()
+
+***
+
+### **Commit Changes**
+
+Here are the changes formatted as a commit message for your Git repository.
