@@ -1,5 +1,3 @@
-import csv
-import requests
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
@@ -7,19 +5,9 @@ from folium.plugins import Draw, MeasureControl
 from branca.element import JavascriptLink, MacroElement
 from jinja2 import Template
 
-st.set_page_config(page_title="School Mini-Maps", layout="wide")
-
 # --------------------------------
 # Config
 # --------------------------------
-DEFAULT_CSV = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
-
-SCHOOLS_FALLBACK = [
-    {"name": "Fairfax HS", "lat": 34.0776, "lon": -118.3611},
-    {"name": "Samuel Gompers MS", "lat": 33.9239, "lon": -118.2620},
-    {"name": "Hoover St ES", "lat": 34.0677, "lon": -118.2830},
-]
-
 # Minimalist basemap presets (base + optional labels overlay)
 BASEMAPS = {
     "OSM Standard": {
@@ -65,28 +53,6 @@ def rgba_from_hex(hex_color: str, alpha: float) -> str:
     r, g, b = hex_to_rgb(hex_color or "#FFFFFF")
     a = max(0.0, min(1.0, float(alpha)))
     return f"rgba({r},{g},{b},{a})"
-
-@st.cache_data(show_spinner=False, ttl=300)
-def load_schools(url: str):
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    reader = csv.DictReader(r.text.splitlines())
-    rows = []
-    for row in reader:
-        name = row.get("LABEL") or row.get("school_name") or row.get("NAME")
-        lat = row.get("LAT") or row.get("latitude") or row.get("lat")
-        lon = row.get("LON") or row.get("longitude") or row.get("lon")
-        if not name or not lat or not lon:
-            continue
-        try:
-            rows.append({"name": str(name).strip(), "lat": float(lat), "lon": float(lon)})
-        except ValueError:
-            continue
-    if not rows:
-        raise ValueError("CSV missing valid rows with name/lat/lon.")
-    uniq = {r["name"]: r for r in rows}
-    names_sorted = sorted(uniq.keys())
-    return names_sorted, uniq
 
 # Hi-res PNG print button
 class HiResPrint(MacroElement):
@@ -180,6 +146,8 @@ if "last_clicked" not in st.session_state:
     st.session_state.last_clicked = None
 if "selected_label_idx" not in st.session_state:
     st.session_state.selected_label_idx = 0
+if "address_coords" not in st.session_state:
+    st.session_state.address_coords = None
 
 # --------------------------------
 # App layout
@@ -196,22 +164,42 @@ show_label_overlay = st.sidebar.toggle(
     value=("with labels" in basemap_choice or "OSM" in basemap_choice or "Stamen" in basemap_choice)
 )
 
-# Data load (with fallback)
-load_error = None
-try:
-    names, name_map = load_schools(DEFAULT_CSV)
-except Exception as e:
-    load_error = str(e)
-    names = [s["name"] for s in SCHOOLS_FALLBACK]
-    name_map = {s["name"]: s for s in SCHOOLS_FALLBACK}
-    st.warning("Using fallback schools. CSV failed to load.")
+# Address input for map centering
+address_input = st.sidebar.text_input("Enter Address or Name", "Samuel Gompers Middle School")
+search_button = st.sidebar.button("Go to Address")
+
+# Geocoding function to get coordinates from address
+@st.cache_data(ttl=3600)
+def geocode_address(address):
+    import geopy.geocoders
+    from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+    try:
+        geolocator = geopy.geocoders.Nominatim(user_agent="streamlit_app")
+        location = geolocator.geocode(address, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+        return None, None
+    except (GeocoderTimedOut, GeocoderUnavailable) as e:
+        st.error(f"Geocoding service error: {e}")
+        return None, None
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return None, None
+
+if search_button or st.session_state.address_coords is None:
+    with st.spinner("Finding location..."):
+        lat, lon = geocode_address(address_input)
+        if lat and lon:
+            st.session_state.address_coords = (lat, lon)
+        else:
+            st.error("Could not find address. Using default location.")
+            st.session_state.address_coords = (33.9239, -118.2620) # Fallback to Gompers MS
+
+lat, lon = st.session_state.address_coords
 
 left, right = st.columns([2.2, 1])
 
 with left:
-    school = st.selectbox("Select school", names, key="school_select")
-    lat, lon = name_map[school]["lat"], name_map[school]["lon"]
-
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         zoom = st.slider("Zoom", 12, 20, 16, key="zoom")
@@ -236,11 +224,11 @@ with left:
             folium.TileLayer(tiles=labels_tiles_url, attr=attr, max_zoom=20, name="labels").add_to(m)
 
         if show_school_marker:
-            folium.CircleMarker([lat, lon], radius=6, color="#000", fill=True, fill_opacity=1, tooltip=school).add_to(m)
+            folium.CircleMarker([lat, lon], radius=6, color="#000", fill=True, fill_opacity=1, tooltip=address_input).add_to(m)
 
         Draw(
             export=True,
-            filename=f"{school}_drawings.geojson",
+            filename=f"map_drawings.geojson",
             position="topleft",
             draw_options={
                 "polyline": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
@@ -269,7 +257,7 @@ with left:
                     html_style = f"font-weight:700;font-size:{size}px;color:{color};background:{bg};padding:2px 6px;border:1px solid {color};border-radius:3px"
                 elif style == "Outlined":
                     html_style = f"font-weight:800;font-size:{size}px;color:{color};-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff"
-                else:  # Filled (orange)
+                else:
                     html_style = f"font-weight:800;font-size:{size}px;color:{color};border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};padding:4px 8px;border-radius:3px"
 
                 html = f"<div style='{html_style}'>{lab['text']}</div>"
@@ -277,26 +265,22 @@ with left:
 
         return m
 
-    # Call the function to create the map
     m = create_folium_map()
 
-    # Hi-res print functionality
     try:
         m.get_root().header.add_child(JavascriptLink("https://unpkg.com/leaflet-easyprint@2.1.9/dist/bundle.min.js"))
-        m.add_child(HiResPrint(file_name=school.replace(" ", "_")))
+        m.add_child(HiResPrint(file_name="map_export_2x"))
     except Exception as e:
         st.warning(f"Hi-res print disabled: {e}")
 
     st.caption("Draw shapes. Click the map to add a new label or icon.")
     map_state = st_folium(m, height=600, width=None, key="map")
 
-    # The code to add a new label/icon at the last clicked point
     if map_state.get("last_clicked") and map_state["last_clicked"] != st.session_state.last_clicked:
         st.session_state.last_clicked = map_state["last_clicked"]
         latc = float(st.session_state.last_clicked["lat"])
         lonc = float(st.session_state.last_clicked["lng"])
         
-        # Determine if a label or icon should be added based on a sidebar toggle
         if st.session_state.get("add_mode", "label") == "label":
             st.session_state.labels.append({
                 "lat": latc,
@@ -308,7 +292,7 @@ with left:
                 "bg_hex": "#FFFFFF",
                 "bg_alpha": 0.8
             })
-        else: # Add icon
+        else:
             icon_name = st.session_state.get("icon_to_add", "Info")
             icon_size = st.session_state.get("icon_size_add", 28)
             icon_color = st.session_state.get("icon_color_add", "#111111")
@@ -346,18 +330,7 @@ with right:
             new_bg_hex = st.color_picker("Background color", "#FFFFFF")
             new_bg_alpha = st.slider("Background opacity", 0.0, 1.0, 0.8)
 
-        # Store default options in session state for adding on click
-        st.session_state["new_text_add"] = new_text
-        st.session_state["new_style_add"] = new_style
-        st.session_state["new_size_add"] = new_size
-        st.session_state["new_text_color_add"] = new_text_color
-        if new_style == "Filled (orange)":
-            st.session_state["new_fill_color_add"] = new_fill_color
-        else:
-            st.session_state["new_bg_hex_add"] = new_bg_hex
-            st.session_state["new_bg_alpha_add"] = new_bg_alpha
-
-    else: # Add icon
+    else:
         st.divider()
         icon_name = st.selectbox("Icon", list(ICON_SVGS.keys()), key="icon_to_add")
         icon_size = st.slider("Icon size", 16, 96, 28, key="icon_size_add")
