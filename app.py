@@ -10,21 +10,54 @@ from jinja2 import Template
 
 st.set_page_config(page_title="School Mini-Maps", layout="wide")
 
-# ------------------------------
+# --------------------------------
 # Config
-# ------------------------------
+# --------------------------------
 DEFAULT_CSV = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
 
-# Fallback: a few LAUSD-ish examples (edit as needed)
 SCHOOLS_FALLBACK = [
     {"name": "Fairfax HS", "lat": 34.0776, "lon": -118.3611},
     {"name": "Samuel Gompers MS", "lat": 33.9239, "lon": -118.2620},
     {"name": "Hoover St ES", "lat": 34.0677, "lon": -118.2830},
 ]
 
-# ------------------------------
-# Helpers
-# ------------------------------
+# Minimalist basemap presets (base + optional labels overlay)
+BASEMAPS = {
+    "OSM Standard": {
+        "base": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "labels": None,
+        "attr": "© OpenStreetMap contributors"
+    },
+    "CARTO Light (no labels)": {
+        "base": "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
+        "labels": "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+        "attr": "© OpenStreetMap, © CARTO"
+    },
+    "CARTO Light (with labels)": {
+        "base": "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
+        "labels": "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+        "attr": "© OpenStreetMap, © CARTO"
+    },
+    "CARTO Dark (no labels)": {
+        "base": "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+        "labels": "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
+        "attr": "© OpenStreetMap, © CARTO"
+    },
+    "CARTO Dark (with labels)": {
+        "base": "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+        "labels": "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
+        "attr": "© OpenStreetMap, © CARTO"
+    },
+    "Stamen Toner (background + labels)": {
+        "base": "https://stamen-tiles-{s}.a.ssl.fastly.net/toner-background/{z}/{x}/{y}.png",
+        "labels": "https://stamen-tiles-{s}.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png",
+        "attr": "Map tiles by Stamen Design, CC BY 3.0. Data © OSM."
+    },
+}
+
+# --------------------------------
+# Helpers (color + rgba)
+# --------------------------------
 def hex_to_rgb(h: str):
     h = (h or "").lstrip("#") or "FFFFFF"
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -52,11 +85,11 @@ def load_schools(url: str):
             continue
     if not rows:
         raise ValueError("CSV missing valid rows with name/lat/lon.")
-    # de-dup by name
     uniq = {r["name"]: r for r in rows}
     names_sorted = sorted(uniq.keys())
     return names_sorted, uniq
 
+# Hi-res PNG print button
 class HiResPrint(MacroElement):
     _template = Template("""
     {% macro script(this, kwargs) %}
@@ -124,6 +157,7 @@ class HiResPrint(MacroElement):
         self.file_name = file_name
         self.position = position
 
+# SVG icon set
 ICON_SVGS = {
     "Entrance": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M2 4h18v24H2z'/><path d='M20 16H8l4-4-2-2-8 8 8 8 2-2-4-4h12z'/></svg>",
     "Parking":  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M6 4h12a8 8 0 010 16H6z'/><rect x='6' y='20' width='6' height='8'/></svg>",
@@ -138,24 +172,33 @@ def colorize_svg(svg: str, fill: str) -> str:
             .replace("<circle", f"<circle fill='{fill}'")
             .replace("<rect", f"<rect fill='{fill}'"))
 
-# ------------------------------
+# --------------------------------
 # Session state
-# ------------------------------
+# --------------------------------
 if "labels" not in st.session_state:
     st.session_state.labels = []
 if "last_clicked" not in st.session_state:
     st.session_state.last_clicked = None
 
-# ------------------------------
-# UI
-# ------------------------------
+# --------------------------------
+# Sidebar toggles
+# --------------------------------
 st.title("School Mini-Maps")
 
-# Safe mode first to avoid third-party tile or JS failures
-safe_mode = st.sidebar.toggle("Safe mode (simplest tiles, no external JS)", value=True)
-use_minimalist_tiles = st.sidebar.toggle("Minimalist CARTO tiles", value=False if safe_mode else True)
+safe_mode = st.sidebar.toggle("Safe mode", value=False)
+basemap_choice = st.sidebar.selectbox(
+    "Basemap preset",
+    list(BASEMAPS.keys()),
+    index=list(BASEMAPS.keys()).index("CARTO Light (no labels)")
+)
+show_label_overlay = st.sidebar.toggle(
+    "Show labels overlay",
+    value=("with labels" in basemap_choice or "OSM" in basemap_choice or "Stamen" in basemap_choice)
+)
 
-# Load schools or fallback
+# --------------------------------
+# Data load (with fallback)
+# --------------------------------
 load_error = None
 try:
     names, name_map = load_schools(DEFAULT_CSV)
@@ -163,7 +206,7 @@ except Exception as e:
     load_error = str(e)
     names = [s["name"] for s in SCHOOLS_FALLBACK]
     name_map = {s["name"]: s for s in SCHOOLS_FALLBACK}
-    st.warning("Using built-in fallback schools. CSV failed to load.")
+    st.warning("Using fallback schools. CSV failed to load.")
 
 left, right = st.columns([2.2, 1])
 
@@ -171,36 +214,27 @@ with left:
     school = st.selectbox("Select school", names, key="school_select")
     lat, lon = name_map[school]["lat"], name_map[school]["lon"]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         zoom = st.slider("Zoom", 12, 20, 16, key="zoom")
     with c2:
         show_school_marker = st.checkbox("Show school marker", value=True, key="show_marker")
     with c3:
         draw_weight = st.slider("Drawing line weight", 1, 10, 3, key="draw_w")
+    with c4:
+        draw_color = st.color_picker("Drawing color", "#FF0000", key="draw_color")
 
-    draw_color = st.color_picker("Drawing color", "#FF0000", key="draw_color")
+    # Tiles
+    bm = BASEMAPS[basemap_choice]
+    base_tiles_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png" if safe_mode else bm["base"]
+    labels_tiles_url = None if safe_mode else bm["labels"]
+    attr = bm["attr"] if not safe_mode else "© OpenStreetMap contributors"
 
-    # Basemap selection
-    if safe_mode:
-        base_tiles_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        labels_tiles_url = None
-        attr = "© OpenStreetMap contributors"
-    else:
-        if use_minimalist_tiles:
-            base_tiles_url = "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
-            labels_tiles_url = "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png"
-            attr = "© OpenStreetMap, © CARTO"
-        else:
-            base_tiles_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-            labels_tiles_url = None
-            attr = "© OpenStreetMap contributors"
-
-    # Build map
+    # Map builder
     def create_folium_map():
         m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None, control_scale=False, zoom_control=True)
         folium.TileLayer(tiles=base_tiles_url, attr=attr, max_zoom=20, name="base").add_to(m)
-        if labels_tiles_url:
+        if labels_tiles_url and show_label_overlay:
             folium.TileLayer(tiles=labels_tiles_url, attr=attr, max_zoom=20, name="labels").add_to(m)
 
         if show_school_marker:
@@ -247,7 +281,7 @@ with left:
 
     m = create_folium_map()
 
-    # Only load external JS for hi-res print when not in safe mode
+    # Hi-res print only when not in safe mode (external JS)
     if not safe_mode:
         try:
             m.get_root().header.add_child(JavascriptLink("https://unpkg.com/leaflet-easyprint@2.1.9/dist/bundle.min.js"))
@@ -324,7 +358,6 @@ with right:
             esize = st.slider("Icon size", 16, 96, lab.get("size", 28))
             ecolor = st.color_picker("Icon color", "#111111")
             if st.button("Apply icon changes", use_container_width=True):
-                # try to recover a base svg; fallback to Info
                 base_svg = ICON_SVGS.get("Info")
                 for v in ICON_SVGS.values():
                     if v.split(">")[0] in lab.get("svg", ""):
@@ -357,3 +390,4 @@ with right:
                 else:
                     lab["bg_hex"] = ebg_hex
                     lab["bg_alpha"] = float(ebg_alpha)
+                    la
