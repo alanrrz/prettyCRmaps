@@ -402,9 +402,3 @@ with right:
                 st.session_state.labels = []
                 st.session_state.selected_label_idx = 0
                 st.experimental_rerun()
-
-***
-
-### **Commit Changes**
-
-Here are the changes formatted as a commit message for your Git repository.
