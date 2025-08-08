@@ -72,23 +72,13 @@ class EasyPrint(MacroElement):
 # session state for custom labels
 if "labels" not in st.session_state:
     st.session_state.labels = []
-if "drawn_items" not in st.session_state:
-    st.session_state.drawn_items = []
+if "last_clicked" not in st.session_state:
+    st.session_state.last_clicked = None
 
 st.title("School Mini-Maps")
 
-# Data source
-src = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
 try:
-    if src == "GitHub CSV":
-        csv_url = st.text_input("Raw CSV URL", DEFAULT_CSV)
-        names, name_map = load_schools(csv_url)
-    else:
-        up = st.file_uploader("Upload schools.csv", type=["csv"])
-        if not up:
-            st.stop()
-        text = up.read().decode("utf-8")
-        names, name_map = load_schools("data:text/plain," + text)
+    names, name_map = load_schools(DEFAULT_CSV)
 except requests.exceptions.RequestException as e:
     st.error(f"Error loading CSV from URL: {e}")
     st.stop()
@@ -110,12 +100,10 @@ with left:
     with c3:
         show_school_marker = st.checkbox("Show school marker", value=True)
 
-    # Drawing & Label Options
     st.subheader("Drawing & Label Options")
     draw_color = st.color_picker("Drawing Color", "#FF0000")
     draw_weight = st.slider("Drawing Line Weight", 1, 10, 3)
 
-    # tiles
     if base.startswith("Positron"):
         tiles = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
         attr = "© OpenStreetMap, © CARTO"
@@ -129,7 +117,6 @@ with left:
         tiles = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         attr = "© OpenStreetMap contributors"
 
-    # Map initialization function
     def create_folium_map(lat, lon, zoom, tiles, attr, show_marker, school_name, draw_color, draw_weight):
         m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None, control_scale=False, zoom_control=True)
         folium.TileLayer(tiles=tiles, attr=attr, max_zoom=20, name="base").add_to(m)
@@ -137,7 +124,6 @@ with left:
         if show_marker:
             folium.CircleMarker([lat, lon], radius=6, color="#000", fill=True, fill_opacity=1, tooltip=school_name).add_to(m)
         
-        # Add a custom draw plugin with all drawing tools enabled and styled
         Draw(
             export=True,
             filename=f"{school_name}_drawings.geojson",
@@ -155,7 +141,6 @@ with left:
         
         m.add_child(MeasureControl(primary_length_unit="miles"))
         
-        # Render existing labels from session state
         for lab in st.session_state.labels:
             style = lab["style"]
             size = lab["size"]
@@ -166,7 +151,7 @@ with left:
                 html = f"<div style='font-weight:700;font-size:{size}px;color:{color};background:{bgcolor};padding:2px 6px;border:1px solid {color};border-radius:3px'>{lab['text']}</div>"
             elif style == "Outlined":
                 html = f"<div style='font-weight:800;font-size:{size}px;color:{color};-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff'>{lab['text']}</div>"
-            else: # Filled (orange)
+            else:
                 html = f"<div style='font-weight:800;font-size:{size}px;color:{color};border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};padding:4px 8px;border-radius:3px'>{lab['text']}</div>"
             
             folium.Marker(
@@ -179,66 +164,70 @@ with left:
 
     m = create_folium_map(lat, lon, zoom, tiles, attr, show_school_marker, school, draw_color, draw_weight)
     
-    # easy print (PNG)
     m.get_root().header.add_child(JavascriptLink("https://unpkg.com/leaflet-easyprint@2.1.9/dist/bundle.min.js"))
     m.add_child(EasyPrint(file_name=school.replace(" ", "_")))
     
-    st.caption("Draw shapes. Add labels. Export PNG with the ⤓ button.")
+    st.caption("Draw shapes. Click the map to add a new label.")
     map_state = st_folium(m, height=560, width=None)
 
-    # Update session state with drawn features
-    if map_state.get("all_drawn_features"):
-        st.session_state.drawn_items = map_state["all_drawn_features"]
-
+    if map_state.get("last_clicked"):
+        st.session_state.last_clicked = map_state["last_clicked"]
+        if st.session_state.last_clicked:
+            new_label_lat = st.session_state.last_clicked['lat']
+            new_label_lon = st.session_state.last_clicked['lng']
+            st.session_state.labels.append({
+                "lat": float(new_label_lat),
+                "lon": float(new_label_lon),
+                "text": "New Label",
+                "style": "Label",
+                "size": 16,
+                "color": "#111",
+                "bgcolor": "rgba(255,255,255,0.8)"
+            })
+            st.session_state.last_clicked = None
+            st.experimental_rerun()
+    
 with right:
-    st.subheader("Add label")
-    label_text = st.text_input("Text", value="POTENTIAL SITE")
-    label_style = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"], index=0)
-    label_size = st.slider("Size (px)", 10, 36, 16)
-    
-    if label_style == "Filled (orange)":
-        label_fill_color = st.color_picker("Fill Color", "#f6a500")
-        label_text_color = st.color_picker("Text Color", "#112")
+    st.subheader("Edit Labels")
+    if not st.session_state.labels:
+        st.info("Click on the map to add your first label.")
     else:
-        label_text_color = st.color_picker("Text Color", "#111111")
-        label_bg_color = st.color_picker("Background Color", "rgba(255,255,255,0.8)")
-    
-    st.write("Click on the map, then press Add at click.")
-    
-    last = map_state.get("last_clicked") if isinstance(map_state, dict) else None
-    st.write(f"Last click: {round(last['lat'],5)},{round(last['lng'],5)}" if last else "Last click: none")
-    
-    add = st.button("Add label at last click", type="primary", use_container_width=True)
-    if add:
-        if not last:
-            st.warning("Click the map first.")
+        label_options = [f"{i}: {lab['text']}" for i, lab in enumerate(st.session_state.labels)]
+        selected_label_index = st.selectbox("Select a label to edit", list(range(len(st.session_state.labels))), format_func=lambda x: label_options[x])
+
+        label_to_edit = st.session_state.labels[selected_label_index]
+        
+        new_text = st.text_input("Text", value=label_to_edit["text"], key=f"text_{selected_label_index}")
+        new_style = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"], index=["Filled (orange)", "Label", "Outlined"].index(label_to_edit.get("style", "Label")), key=f"style_{selected_label_index}")
+        new_size = st.slider("Size (px)", 10, 36, value=label_to_edit.get("size", 16), key=f"size_{selected_label_index}")
+        
+        if new_style == "Filled (orange)":
+            new_fill_color = st.color_picker("Fill Color", value=label_to_edit.get("fillcolor", "#f6a500"), key=f"fillcolor_{selected_label_index}")
+            new_text_color = st.color_picker("Text Color", value=label_to_edit.get("color", "#112"), key=f"textcolor_{selected_label_index}")
         else:
-            label_data = {
-                "lat": float(last["lat"]),
-                "lon": float(last["lng"]),
-                "text": label_text,
-                "style": label_style,
-                "size": label_size
-            }
-            if label_style == "Filled (orange)":
-                label_data["color"] = label_text_color
-                label_data["fillcolor"] = label_fill_color
+            new_text_color = st.color_picker("Text Color", value=label_to_edit.get("color", "#111111"), key=f"textcolor_{selected_label_index}")
+            new_bg_color = st.color_picker("Background Color", value=label_to_edit.get("bgcolor", "rgba(255,255,255,0.8)"), key=f"bgcolor_{selected_label_index}")
+
+        if st.button("Apply Changes", use_container_width=True, key=f"update_button_{selected_label_index}"):
+            st.session_state.labels[selected_label_index]["text"] = new_text
+            st.session_state.labels[selected_label_index]["style"] = new_style
+            st.session_state.labels[selected_label_index]["size"] = new_size
+            st.session_state.labels[selected_label_index]["color"] = new_text_color
+            if new_style == "Filled (orange)":
+                st.session_state.labels[selected_label_index]["fillcolor"] = new_fill_color
+                st.session_state.labels[selected_label_index].pop("bgcolor", None)
             else:
-                label_data["color"] = label_text_color
-                label_data["bgcolor"] = label_bg_color
-            
-            st.session_state.labels.append(label_data)
+                st.session_state.labels[selected_label_index]["bgcolor"] = new_bg_color
+                st.session_state.labels[selected_label_index].pop("fillcolor", None)
             st.experimental_rerun()
-            
-    st.subheader("Modify Labels")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Undo Last Label", use_container_width=True):
-            if st.session_state.labels:
-                st.session_state.labels.pop()
+
+        st.subheader("Manage Labels")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Delete Selected Label", use_container_width=True, key=f"delete_button_{selected_label_index}"):
+                st.session_state.labels.pop(selected_label_index)
                 st.experimental_rerun()
-    with col2:
-        if st.button("Clear all labels", use_container_width=True):
-            st.session_state.labels = []
-            st.experimental_rerun()
+        with col2:
+            if st.button("Clear All Labels", use_container_width=True, key="clear_all_button"):
+                st.session_state.labels = []
+                st.experimental_rerun()
