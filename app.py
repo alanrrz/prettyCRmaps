@@ -1,47 +1,117 @@
+# School Mini-Maps (B/W) — Streamlit + prettymaps
+# Loads your GitHub CSV by default, renders ultra-minimal static maps, exports PNGs.
+
 import io
+import sys
+import traceback
 import streamlit as st
 
+# Fail-safe imports with a clear error if deps are missing
 try:
     import pandas as pd
     import matplotlib.pyplot as plt
     from prettymaps import plot as pretty_plot
 except Exception as e:
     st.error(
-        "Dependencies not installed. Confirm runtime.txt is '3.11' and requirements are pinned. "
-        f"Installer error: {e}"
+        "Dependencies not installed. Confirm runtime.txt is '3.11' and requirements.txt pins "
+        "versions as provided. Installer error:\n\n"
+        f"{e}\n\n"
+        f"{traceback.format_exc()}"
     )
     st.stop()
 
-
 st.set_page_config(page_title="LAUSD Mini-Maps", layout="wide")
 
-RAW_CSV = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
+RAW_CSV_DEFAULT = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
 
 @st.cache_data(show_spinner=False)
-def load_schools(url: str) -> pd.DataFrame:
-    df = pd.read_csv(url).dropna(subset=["school_name"])
-    for col in ["latitude", "longitude"]:
-        if col not in df.columns:
-            raise ValueError(f"Missing column: {col}")
+def load_schools_csv(src):
+    if hasattr(src, "read"):
+        df = pd.read_csv(src)
+    else:
+        df = pd.read_csv(src)
+    if "school_name" not in df.columns:
+        raise ValueError("Missing required column: school_name")
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        raise ValueError("Missing required columns: latitude, longitude")
+    df = df.dropna(subset=["school_name", "latitude", "longitude"]).copy()
     df["school_name"] = df["school_name"].astype(str)
-    df = df.dropna(subset=["latitude", "longitude"])
+    df["latitude"] = df["latitude"].astype(float)
+    df["longitude"] = df["longitude"].astype(float)
     return df
+
+def get_style_palette(style: str, line_w: int):
+    if style == "Mono Light":
+        return dict(
+            bg="#FFFFFF", fg="#111111",
+            bld_face="#F7F7F7", bld_edge="#00000000",
+            water_face="#EDEDED", green_face="#F3F3F3",
+            lw=line_w
+        )
+    if style == "Mono Dark":
+        return dict(
+            bg="#0E0E0E", fg="#FAFAFA",
+            bld_face="#1A1A1A", bld_edge="#00000000",
+            water_face="#141414", green_face="#121212",
+            lw=line_w
+        )
+    # Print Tiny
+    return dict(
+        bg="#FFFFFF", fg="#000000",
+        bld_face="#FFFFFF", bld_edge="#000000",
+        water_face="#FFFFFF", green_face="#FFFFFF",
+        lw=line_w
+    )
+
+def make_layers(pal):
+    lw = pal["lw"]
+    return {
+        "perimeter": {"circle": False},
+        "streets": {
+            "width": {
+                "motorway": 3 + lw,
+                "primary": 2 + lw,
+                "secondary": 2 + lw,
+                "tertiary": 1 + lw,
+                "residential": 1 + lw,
+                "path": 0.5 + 0.5 * lw,
+            },
+            "zorder": 3,
+            "default_color": pal["fg"],
+        },
+        "buildings": {
+            "facecolor": pal["bld_face"],
+            "edgecolor": pal["bld_edge"],
+            "linewidth": 0.3 if pal["bld_edge"] != "#00000000" else 0,
+            "zorder": 2,
+        },
+        "water": {"facecolor": pal["water_face"], "edgecolor": pal["water_face"], "zorder": 1},
+        "green": {"facecolor": pal["green_face"], "edgecolor": pal["green_face"], "zorder": 1},
+    }
 
 st.title("School Mini-Maps (B/W)")
 
-# Source selector
-src = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
-if src == "GitHub CSV":
-    url = st.text_input("Raw CSV URL", RAW_CSV)
-    df = load_schools(url)
+# Data source controls
+src_choice = st.radio("Data source", ["GitHub CSV", "Upload CSV"], horizontal=True)
+if src_choice == "GitHub CSV":
+    csv_url = st.text_input("Raw CSV URL", RAW_CSV_DEFAULT)
+    try:
+        df = load_schools_csv(csv_url)
+    except Exception as e:
+        st.error(f"CSV load failed: {e}")
+        st.stop()
 else:
     up = st.file_uploader("Upload schools.csv", type=["csv"])
     if not up:
         st.stop()
-    df = load_schools(up)
+    try:
+        df = load_schools_csv(up)
+    except Exception as e:
+        st.error(f"CSV load failed: {e}")
+        st.stop()
 
-# Controls
 left, right = st.columns([2, 1])
+
 with left:
     school = st.selectbox("School", options=df["school_name"].tolist())
     row = df[df["school_name"] == school].iloc[0]
@@ -60,50 +130,29 @@ with left:
 
 render = st.button("Render", type="primary")
 
+with right:
+    st.subheader("Notes")
+    st.write("- Use small radii for clarity in tiny prints.")
+    st.write("- ‘Print Tiny’ is pure outlines for photocopies.")
+    st.write("- Export at 450–600 DPI for small callouts.")
+
 if render:
-    # Grayscale/photocopy-safe palettes
-    if style == "Mono Light":
-        bg, fg = "#FFFFFF", "#111111"
-        bld_face, bld_edge = "#F7F7F7", "#00000000"
-        water_face, green_face = "#EDEDED", "#F3F3F3"
-    elif style == "Mono Dark":
-        bg, fg = "#0E0E0E", "#FAFAFA"
-        bld_face, bld_edge = "#1A1A1A", "#00000000"
-        water_face, green_face = "#141414", "#121212"
-    else:  # Print Tiny
-        bg, fg = "#FFFFFF", "#000000"
-        bld_face, bld_edge = "#FFFFFF", "#000000"
-        water_face, green_face = "#FFFFFF", "#FFFFFF"
+    pal = get_style_palette(style, line_w)
+    layers = make_layers(pal)
 
     fig, ax = plt.subplots(figsize=(fig_size_in, fig_size_in), dpi=dpi)
-    ax.set_facecolor(bg)
-
-    layers = {
-        "perimeter": {"circle": False},
-        "streets": {
-            "width": {
-                "motorway": 3 + line_w,
-                "primary": 2 + line_w,
-                "secondary": 2 + line_w,
-                "tertiary": 1 + line_w,
-                "residential": 1 + line_w,
-                "path": 0.5 + 0.5 * line_w,
-            },
-            "zorder": 3,
-            "default_color": fg,
-        },
-        "buildings": {
-            "facecolor": bld_face,
-            "edgecolor": bld_edge,
-            "linewidth": 0.3 if bld_edge != "#00000000" else 0,
-            "zorder": 2,
-        },
-        "water": {"facecolor": water_face, "edgecolor": water_face, "zorder": 1},
-        "green": {"facecolor": green_face, "edgecolor": green_face, "zorder": 1},
-    }
+    ax.set_facecolor(pal["bg"])
 
     center = f"{lat},{lon}"
-    pretty_plot(center, radius=radius_m, layers=layers, ax=ax, padding=0.04)
+    try:
+        pretty_plot(center, radius=radius_m, layers=layers, ax=ax, padding=0.04)
+    except Exception as e:
+        st.error(
+            "Map render failed. OSM network or geospatial deps may be missing. "
+            f"Error: {e}"
+        )
+        st.stop()
+
     ax.set_axis_off()
 
     buf = io.BytesIO()
@@ -117,3 +166,4 @@ if render:
         file_name=f"{school.replace(' ', '_')}_{radius_m}m_{style.replace(' ','_')}.png",
         mime="image/png",
     )
+
