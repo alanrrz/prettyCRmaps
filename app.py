@@ -12,6 +12,18 @@ st.set_page_config(page_title="School Mini-Maps", layout="wide")
 DEFAULT_CSV = "https://raw.githubusercontent.com/alanrrz/la_buffer_app_clean/main/schools.csv"
 
 # ------------------------------
+# Helpers for color handling
+# ------------------------------
+def hex_to_rgb(h: str):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+def rgba_from_hex(hex_color: str, alpha: float) -> str:
+    r, g, b = hex_to_rgb(hex_color or "#FFFFFF")
+    a = max(0.0, min(1.0, float(alpha)))
+    return f"rgba({r},{g},{b},{a})"
+
+# ------------------------------
 # Data
 # ------------------------------
 @st.cache_data(show_spinner=False)
@@ -150,158 +162,68 @@ with left:
     school = st.selectbox("Select school", names)
     lat, lon = name_map[school]["lat"], name_map[school]["lon"]
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     with c1:
         zoom = st.slider("Zoom", 12, 20, 16)
     with c2:
-        base = st.selectbox("Style", [
-            "CARTO Light (no labels)",
-            "CARTO Light (with labels)",
-            "DarkMatter (no labels)",
-            "DarkMatter (with labels)",
-            "OSM",
-            "Stamen Toner"
-        ], index=0)
+        base_tiles_url = "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
+        labels_tiles_url = "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png"
+        attr = "© OpenStreetMap, © CARTO"
     with c3:
         show_school_marker = st.checkbox("Show school marker", value=True)
-    with c4:
-        draw_weight = st.slider("Drawing line weight", 1, 10, 3)
 
-    st.subheader("Drawing color")
-    draw_color = st.color_picker("Color", "#FF0000")
+    draw_color = st.color_picker("Drawing color", "#FF0000")
+    draw_weight = st.slider("Drawing line weight", 1, 10, 3)
 
-    # Basemap config
-    def basemap_from_choice(choice: str):
-        if choice == "CARTO Light (no labels)":
-            return ("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-                    "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
-                    "© OpenStreetMap, © CARTO",
-                    False)
-        if choice == "CARTO Light (with labels)":
-            return ("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-                    "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
-                    "© OpenStreetMap, © CARTO",
-                    True)
-        if choice == "DarkMatter (no labels)":
-            return ("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
-                    "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
-                    "© OpenStreetMap, © CARTO",
-                    False)
-        if choice == "DarkMatter (with labels)":
-            return ("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
-                    "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
-                    "© OpenStreetMap, © CARTO",
-                    True)
-        if choice == "Stamen Toner":
-            return ("https://stamen-tiles-{s}.a.ssl.fastly.net/toner-background/{z}/{x}/{y}.png",
-                    "https://stamen-tiles-{s}.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png",
-                    "Map tiles by Stamen Design, CC BY 3.0. Data © OSM.",
-                    True)
-        return ("https://tile.openstreetmap.org/{z}/{x}/{y}.png", None, "© OpenStreetMap contributors", True)
+    def create_folium_map():
+        m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles=None)
+        folium.TileLayer(tiles=base_tiles_url, attr=attr, max_zoom=20).add_to(m)
+        folium.TileLayer(tiles=labels_tiles_url, attr=attr, max_zoom=20).add_to(m)
 
-    base_tiles, labels_tiles, attr, default_show_labels = basemap_from_choice(base)
-
-    # Map factory
-    def create_folium_map(lat, lon, zoom, base_tiles, labels_tiles, attr,
-                          show_marker, school_name, draw_color, draw_weight):
-        m = folium.Map(
-            location=[lat, lon],
-            zoom_start=zoom,
-            tiles=None,
-            control_scale=False,
-            zoom_control=True
-        )
-        folium.TileLayer(tiles=base_tiles, attr=attr, max_zoom=20, name="base").add_to(m)
-        if labels_tiles and default_show_labels:
-            folium.TileLayer(tiles=labels_tiles, attr=attr, max_zoom=20, name="labels").add_to(m)
-
-        if show_marker:
-            folium.CircleMarker(
-                [lat, lon],
-                radius=6,
-                color="#000",
-                fill=True,
-                fill_opacity=1,
-                tooltip=school_name
-            ).add_to(m)
+        if show_school_marker:
+            folium.CircleMarker([lat, lon], radius=6, color="#000", fill=True, fill_opacity=1, tooltip=school).add_to(m)
 
         Draw(
             export=True,
-            filename=f"{school_name}_drawings.geojson",
+            filename=f"{school}_drawings.geojson",
             position="topleft",
-            draw_options={
-                "polyline": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
-                "rectangle": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
-                "polygon": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
-                "circle": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
-                "circlemarker": {"shapeOptions": {"color": draw_color, "weight": draw_weight}},
-                "marker": False
-            },
+            draw_options={"polyline": {"shapeOptions": {"color": draw_color, "weight": draw_weight}}},
             edit_options={"edit": True, "remove": True},
         ).add_to(m)
 
         m.add_child(MeasureControl(primary_length_unit="miles"))
 
-        # Render saved labels and icons
         for lab in st.session_state.labels:
             if lab.get("style") == "SVG_ICON":
-                folium.Marker(
-                    [lab["lat"], lab["lon"]],
-                    draggable=True,
-                    icon=folium.DivIcon(html=lab["svg"])
-                ).add_to(m)
+                folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=lab["svg"])).add_to(m)
                 continue
 
             style = lab.get("style", "Label")
             size = lab.get("size", 16)
             color = lab.get("color", "#111")
-            bgcolor = lab.get("bgcolor", "rgba(255,255,255,0.8)")
 
             if style == "Label":
-                html = (
-                    f"<div style='font-weight:700;font-size:{size}px;color:{color};"
-                    f"background:{bgcolor};padding:2px 6px;border:1px solid {color};"
-                    f"border-radius:3px'>{lab['text']}</div>"
-                )
+                bg = rgba_from_hex(lab.get("bg_hex", "#FFFFFF"), lab.get("bg_alpha", 0.8))
+                html = f"<div style='font-weight:700;font-size:{size}px;color:{color};background:{bg};padding:2px 6px;border:1px solid {color};border-radius:3px'>{lab['text']}</div>"
             elif style == "Outlined":
-                html = (
-                    f"<div style='font-weight:800;font-size:{size}px;color:{color};"
-                    f"-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff'>{lab['text']}</div>"
-                )
+                bg = rgba_from_hex(lab.get("bg_hex", "#FFFFFF"), lab.get("bg_alpha", 0.8))
+                html = f"<div style='font-weight:800;font-size:{size}px;color:{color};background:{bg};-webkit-text-stroke:2px #fff;text-shadow:0 0 2px #fff'>{lab['text']}</div>"
             else:
-                html = (
-                    f"<div style='font-weight:800;font-size:{size}px;color:{color};"
-                    f"border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};"
-                    f"padding:4px 8px;border-radius:3px'>{lab['text']}</div>"
-                )
+                html = f"<div style='font-weight:800;font-size:{size}px;color:{color};border:2px solid {color};background:{lab.get('fillcolor', '#f6a500')};padding:4px 8px;border-radius:3px'>{lab['text']}</div>"
 
-            folium.Marker(
-                [lab["lat"], lab["lon"]],
-                draggable=True,
-                icon=folium.DivIcon(html=html),
-            ).add_to(m)
+            folium.Marker([lab["lat"], lab["lon"]], draggable=True, icon=folium.DivIcon(html=html)).add_to(m)
 
         return m
 
-    m = create_folium_map(
-        lat, lon, zoom,
-        base_tiles, labels_tiles, attr,
-        show_school_marker, school,
-        draw_color, draw_weight
-    )
-
-    # add easyPrint bundle and hi-res control
+    m = create_folium_map()
     m.get_root().header.add_child(JavascriptLink("https://unpkg.com/leaflet-easyprint@2.1.9/dist/bundle.min.js"))
     m.add_child(HiResPrint(file_name=school.replace(" ", "_")))
-
-    st.caption("Click the map to set a placement point for labels or icons.")
     map_state = st_folium(m, height=560, width=None)
 
     if map_state.get("last_clicked"):
         st.session_state.last_clicked = map_state["last_clicked"]
 
 with right:
-    # Add text label panel
     st.subheader("Add text label")
     new_text = st.text_input("Text", value="New Label")
     new_style = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"], index=1)
@@ -311,9 +233,10 @@ with right:
         new_text_color = st.color_picker("Text color", "#111111")
     else:
         new_text_color = st.color_picker("Text color", "#111111")
-        new_bg_color = st.color_picker("Background color", "rgba(255,255,255,0.8)")
+        new_bg_hex = st.color_picker("Background color", "#FFFFFF")
+        new_bg_alpha = st.slider("Background opacity", 0.0, 1.0, 0.8)
 
-    if st.button("Add text at last click", use_container_width=True):
+    if st.button("Add text at last click"):
         if st.session_state.get("last_clicked"):
             latc = float(st.session_state.last_clicked["lat"])
             lonc = float(st.session_state.last_clicked["lng"])
@@ -327,99 +250,81 @@ with right:
             }
             if new_style == "Filled (orange)":
                 item["fillcolor"] = new_fill_color
-                item.pop("bgcolor", None)
             else:
-                item["bgcolor"] = new_bg_color
-                item.pop("fillcolor", None)
+                item["bg_hex"] = new_bg_hex
+                item["bg_alpha"] = float(new_bg_alpha)
             st.session_state.labels.append(item)
             st.experimental_rerun()
-        else:
-            st.warning("Click on the map first.")
 
     st.divider()
 
-    # Add SVG icon panel
     st.subheader("Add icon")
     icon_name = st.selectbox("Icon", list(ICON_SVGS.keys()))
     icon_size = st.slider("Icon size", 16, 96, 28)
     icon_color = st.color_picker("Icon color", "#111111")
-    if st.button("Add icon at last click", use_container_width=True):
+    if st.button("Add icon at last click"):
         if st.session_state.get("last_clicked"):
             latc = float(st.session_state.last_clicked["lat"])
             lonc = float(st.session_state.last_clicked["lng"])
             svg = colorize_svg(ICON_SVGS[icon_name], icon_color)
             html = f"<div style='width:{icon_size}px;height:{icon_size}px'>{svg}</div>"
-            st.session_state.labels.append({
-                "lat": latc, "lon": lonc,
-                "text": "",
-                "style": "SVG_ICON",
-                "size": icon_size,
-                "svg": html
-            })
+            st.session_state.labels.append({"lat": latc, "lon": lonc, "style": "SVG_ICON", "size": icon_size, "svg": html})
             st.experimental_rerun()
-        else:
-            st.warning("Click on the map first.")
 
     st.divider()
 
-    # Edit existing labels
-    st.subheader("Edit labels")
+    st.subheader("Edit labels/icons")
     if not st.session_state.labels:
         st.info("No labels yet.")
     else:
-        label_options = [f"{i}: {('ICON ' + l.get('style','')) if l.get('style')=='SVG_ICON' else l.get('text','')}" for i, l in enumerate(st.session_state.labels)]
-        selected_label_index = st.selectbox("Select", list(range(len(st.session_state.labels))), format_func=lambda x: label_options[x])
-
-        lab = st.session_state.labels[selected_label_index]
+        idx = st.selectbox("Select", list(range(len(st.session_state.labels))))
+        lab = st.session_state.labels[idx]
         if lab.get("style") == "SVG_ICON":
-            # simple icon edits
-            esize = st.slider("Icon size", 16, 96, lab.get("size", 28), key=f"esize_{selected_label_index}")
-            ecolor = st.color_picker("Icon color", "#111111", key=f"ecolor_{selected_label_index}")
-            if st.button("Apply icon changes", use_container_width=True, key=f"apply_icon_{selected_label_index}"):
-                # rebuild svg HTML with new color and size
-                # best effort to recover base icon by finding any known SVG in html
-                base_match = None
-                for k,v in ICON_SVGS.items():
+            esize = st.slider("Icon size", 16, 96, lab.get("size", 28))
+            ecolor = st.color_picker("Icon color", "#111111")
+            if st.button("Apply icon changes"):
+                base_svg = None
+                for v in ICON_SVGS.values():
                     if v.split(">")[0] in lab["svg"]:
-                        base_match = v
+                        base_svg = v
                         break
-                base_svg = base_match or ICON_SVGS["Info"]
-                colored = colorize_svg(base_svg, ecolor)
+                base_svg = base_svg or ICON_SVGS["Info"]
                 lab["size"] = esize
-                lab["svg"] = f"<div style='width:{esize}px;height:{esize}px'>{colored}</div>"
+                lab["svg"] = f"<div style='width:{esize}px;height:{esize}px'>{colorize_svg(base_svg, ecolor)}</div>"
                 st.experimental_rerun()
         else:
-            etext = st.text_input("Text", value=lab.get("text",""), key=f"text_{selected_label_index}")
-            estyle = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"],
-                                  index=["Filled (orange)", "Label", "Outlined"].index(lab.get("style","Label")),
-                                  key=f"style_{selected_label_index}")
-            esize = st.slider("Size (px)", 10, 36, lab.get("size", 16), key=f"size_{selected_label_index}")
+            etext = st.text_input("Text", value=lab.get("text", ""))
+            estyle = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"], index=["Filled (orange)", "Label", "Outlined"].index(lab.get("style", "Label")))
+            esize = st.slider("Size (px)", 10, 36, lab.get("size", 16))
             if estyle == "Filled (orange)":
-                efill = st.color_picker("Fill color", lab.get("fillcolor", "#f6a500"), key=f"fill_{selected_label_index}")
-                ecol = st.color_picker("Text color", lab.get("color", "#111111"), key=f"tcol_{selected_label_index}")
+                efill = st.color_picker("Fill color", lab.get("fillcolor", "#f6a500"))
+                ecol = st.color_picker("Text color", lab.get("color", "#111111"))
             else:
-                ecol = st.color_picker("Text color", lab.get("color", "#111111"), key=f"tcol_{selected_label_index}")
-                ebg = st.color_picker("Background color", lab.get("bgcolor", "rgba(255,255,255,0.8)"), key=f"bg_{selected_label_index}")
+                ecol = st.color_picker("Text color", lab.get("color", "#111111"))
+                ebg_hex = st.color_picker("Background color", lab.get("bg_hex", "#FFFFFF"))
+                ebg_alpha = st.slider("Background opacity", 0.0, 1.0, float(lab.get("bg_alpha", 0.8)))
 
-            if st.button("Apply text changes", use_container_width=True, key=f"apply_{selected_label_index}"):
+            if st.button("Apply text changes"):
                 lab["text"] = etext
                 lab["style"] = estyle
                 lab["size"] = esize
                 lab["color"] = ecol
                 if estyle == "Filled (orange)":
                     lab["fillcolor"] = efill
-                    lab.pop("bgcolor", None)
+                    lab.pop("bg_hex", None)
+                    lab.pop("bg_alpha", None)
                 else:
-                    lab["bgcolor"] = ebg
+                    lab["bg_hex"] = ebg_hex
+                    lab["bg_alpha"] = float(ebg_alpha)
                     lab.pop("fillcolor", None)
                 st.experimental_rerun()
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Delete selected", use_container_width=True, key=f"del_{selected_label_index}"):
-                st.session_state.labels.pop(selected_label_index)
+            if st.button("Delete selected"):
+                st.session_state.labels.pop(idx)
                 st.experimental_rerun()
         with col2:
-            if st.button("Clear all labels", use_container_width=True):
+            if st.button("Clear all"):
                 st.session_state.labels = []
                 st.experimental_rerun()
