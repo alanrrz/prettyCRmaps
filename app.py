@@ -4,6 +4,9 @@ from streamlit_folium import st_folium
 from folium.plugins import Draw, MeasureControl
 from branca.element import JavascriptLink, MacroElement
 from jinja2 import Template
+import geopy.geocoders
+
+st.set_page_config(page_title="School Mini-Maps", layout="wide")
 
 # --------------------------------
 # Config
@@ -147,7 +150,8 @@ if "last_clicked" not in st.session_state:
 if "selected_label_idx" not in st.session_state:
     st.session_state.selected_label_idx = 0
 if "address_coords" not in st.session_state:
-    st.session_state.address_coords = None
+    # Default location for initial load
+    st.session_state.address_coords = (33.9239, -118.2620)
 
 # --------------------------------
 # App layout
@@ -171,7 +175,6 @@ search_button = st.sidebar.button("Go to Address")
 # Geocoding function to get coordinates from address
 @st.cache_data(ttl=3600)
 def geocode_address(address):
-    import geopy.geocoders
     from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
     try:
         geolocator = geopy.geocoders.Nominatim(user_agent="streamlit_app")
@@ -186,14 +189,13 @@ def geocode_address(address):
         st.error(f"An unexpected error occurred: {e}")
         return None, None
 
-if search_button or st.session_state.address_coords is None:
+if search_button:
     with st.spinner("Finding location..."):
         lat, lon = geocode_address(address_input)
         if lat and lon:
             st.session_state.address_coords = (lat, lon)
         else:
-            st.error("Could not find address. Using default location.")
-            st.session_state.address_coords = (33.9239, -118.2620) # Fallback to Gompers MS
+            st.error("Could not find address. Reverting to last known location.")
 
 lat, lon = st.session_state.address_coords
 
