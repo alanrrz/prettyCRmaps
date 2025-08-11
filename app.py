@@ -192,12 +192,14 @@ def geocode_address(address):
 if search_button:
     with st.spinner("Finding location..."):
         lat, lon = geocode_address(address_input)
-        if lat and lon:
+        if lat is not None and lon is not None:
             st.session_state.address_coords = (lat, lon)
         else:
-            st.error("Could not find address. Reverting to last known location.")
+            st.error("Could not find address. Showing last known location.")
+            if "address_coords" not in st.session_state:
+                st.session_state.address_coords = (33.9239, -118.2620)
 
-lat, lon = st.session_state.address_coords
+lat, lon = st.session_state.get("address_coords", (33.9239, -118.2620))
 
 left, right = st.columns([2.2, 1])
 
