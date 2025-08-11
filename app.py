@@ -63,6 +63,10 @@ class HiResPrint(MacroElement):
     {% macro script(this, kwargs) %}
     (function(){
       var map = {{this._parent.get_name()}};
+      if (!(window.L && L.easyPrint)) {
+        console.warn('easyPrint plugin not loaded; export disabled');
+        return;
+      }
       var originalSize;
 
       function resizeMap(factor){
