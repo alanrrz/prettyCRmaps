@@ -6,6 +6,12 @@ from branca.element import JavascriptLink, MacroElement
 from jinja2 import Template
 import geopy.geocoders
 
+def rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
 st.set_page_config(page_title="School Mini-Maps", layout="wide")
 
 # --------------------------------
@@ -320,7 +326,7 @@ with left:
                 "color": icon_color
             })
         
-        st.experimental_rerun()
+        rerun()
     
 with right:
     st.subheader("Add new element")
@@ -371,7 +377,7 @@ with right:
                 lab["color"] = new_icon_color
                 lab["base_svg_key"] = new_icon_name
                 lab["svg"] = f"<div style='width:{new_icon_size}px;height:{new_icon_size}px'>{svg}</div>"
-                st.experimental_rerun()
+                rerun()
         else:
             new_text = st.text_input("Text", value=lab.get("text", ""), key=f"edit_text_{selected_label_index}")
             new_style = st.selectbox("Style", ["Filled (orange)", "Label", "Outlined"], index=["Filled (orange)", "Label", "Outlined"].index(lab.get("style", "Label")), key=f"edit_style_{selected_label_index}")
@@ -398,7 +404,7 @@ with right:
                     lab["bg_hex"] = new_bg_hex
                     lab["bg_alpha"] = float(new_bg_alpha)
                     lab.pop("fillcolor", None)
-                st.experimental_rerun()
+                rerun()
 
         st.divider()
         col1, col2 = st.columns(2)
@@ -406,9 +412,9 @@ with right:
             if st.button("Delete Selected Element", use_container_width=True, key=f"delete_button_{selected_label_index}"):
                 st.session_state.labels.pop(selected_label_index)
                 st.session_state.selected_label_idx = max(0, selected_label_index - 1)
-                st.experimental_rerun()
+                rerun()
         with col2:
             if st.button("Clear All Elements", use_container_width=True, key="clear_all_button"):
                 st.session_state.labels = []
                 st.session_state.selected_label_idx = 0
-                st.experimental_rerun()
+                rerun()
